@@ -5,8 +5,8 @@ import { newScanId, revisionHash } from "@/lib/scan/ids";
 import { parseJsonObject } from "@/lib/scan/json";
 import { repairUserMessage, REVIEW_SYSTEM_PROMPT, SCAN_SYSTEM_PROMPT } from "@/lib/scan/prompt";
 import { summarizeChunks } from "@/lib/scan/review";
-import { reviewResponseSchema, type SignalLevel } from "@/lib/scan/schema";
-import { chunkChars, localSummary, scoreDocument, type ChunkAssessment } from "@/lib/scan/score";
+import { reviewResponseSchema } from "@/lib/scan/schema";
+import { chunkChars, chunkTargetRanges, localSummary, scoreDocument, type ChunkAssessment } from "@/lib/scan/score";
 import { reconstruct, segmentSentences } from "@/lib/scan/sentences";
 import { alignAnnotations, parseChunkResponse, type AlignedAnnotation } from "@/lib/scan/validate";
 import { MuseRequestError, museCompleteWithRetry, type MuseConfig } from "@/lib/muse";
@@ -145,6 +145,7 @@ async function executeScan(request: ScanRequest, push: (event: ScanEvent) => voi
 					genre: "unknown",
 					note: "",
 					analyzedChars: 0,
+					ranges: [],
 					failed: true,
 				});
 				emit(
@@ -163,7 +164,7 @@ async function executeScan(request: ScanRequest, push: (event: ScanEvent) => voi
 					completed,
 					failed: failedChunks.length,
 					total: chunks.length,
-					scores: scoreDocument(source.length, assessments, annotations),
+					scores: scoreDocument(source.length, assessments, annotations, { preliminary: true }),
 				}),
 			);
 		};
@@ -181,8 +182,8 @@ async function executeScan(request: ScanRequest, push: (event: ScanEvent) => voi
 			return;
 		}
 
-		const scores = scoreDocument(source.length, assessments, annotations);
-		let summary = localSummary(assessments, scores);
+		const scores = scoreDocument(source.length, assessments, annotations, { preliminary: false });
+		let summary = localSummary(scores);
 
 		if (request.config.reviewEnabled && assessments.some((item) => !item.failed)) {
 			try {
@@ -229,7 +230,6 @@ async function executeScan(request: ScanRequest, push: (event: ScanEvent) => voi
 				type: "scan_completed",
 				scores,
 				summary,
-				signal: scores.signal,
 				failedChunks,
 			}),
 		);
@@ -305,10 +305,11 @@ async function analyzeChunk(
 		dropped: aligned.report.dropped,
 		assessment: {
 			chunkId: chunk.id,
-			signal: parsed.value.assessment.signal as SignalLevel,
+			signal: parsed.value.assessment.signal,
 			genre: parsed.value.assessment.genre,
 			note: parsed.value.assessment.note,
 			analyzedChars: chunkChars(chunk),
+			ranges: chunkTargetRanges(chunk),
 			failed: false,
 		},
 	};

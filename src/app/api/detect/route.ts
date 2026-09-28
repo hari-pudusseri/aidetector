@@ -74,7 +74,8 @@ export async function POST(request: Request) {
 						console.log(
 							JSON.stringify({
 								message: "scan done",
-								signal: event.signal,
+								headline: event.scores.headline,
+								flaggedCoverage: event.scores.flaggedCoveragePercent,
 								failed: event.failedChunks.length,
 							}),
 						);

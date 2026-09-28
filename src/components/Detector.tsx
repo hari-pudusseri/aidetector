@@ -6,7 +6,17 @@ import { readScanEvents } from "@/lib/scan/client";
 import type { ScanEvent } from "@/lib/scan/events";
 import { flattenHighlights, highlightTitle, type Highlight } from "@/lib/scan/highlights";
 import { SAMPLE_TEXT } from "@/lib/sample";
-import { tallyPatterns, type DocumentScores, type PatternTally } from "@/lib/scan/score";
+import { tallyPatterns, type PatternTally, type ScanFindings } from "@/lib/scan/score";
+import {
+	AUTHORSHIP_DISCLAIMER,
+	FLAGGED_COVERAGE_TOOLTIP,
+	HEADLINE_COPY,
+	isFindingsV2,
+	isLegacyScores,
+	legacyFindings,
+	presentHeadline,
+	scoreFindings,
+} from "@/lib/scan/findings";
 import { AI_PATTERNS, COUNTER_PATTERNS, PATTERN_BLURBS, PATTERN_LABELS, type PatternCode } from "@/lib/scan/schema";
 import type { AlignedAnnotation } from "@/lib/scan/validate";
 
@@ -18,7 +28,7 @@ type ScanView = {
 	scanId: string;
 	revision: string;
 	annotations: AlignedAnnotation[];
-	scores: DocumentScores | null;
+	scores: ScanFindings | null;
 	completed: number;
 	total: number;
 	failedChunks: string[];
@@ -48,97 +58,28 @@ function strengthLabel(strength: 1 | 2 | 3): string {
 	return strength === 1 ? "subtle" : strength === 3 ? "pronounced" : "clear";
 }
 
-type Coverage = {
-	aiChars: number;
-	humanChars: number;
-	restChars: number;
-	aiPercent: number;
-	humanPercent: number;
-	mixedPercent: number;
-};
-
-type Verdict = "ai" | "human" | "mixed";
-
-function verdictOf(coverage: Coverage): Verdict {
-	if (coverage.aiPercent >= coverage.humanPercent + 12 && coverage.aiPercent >= 28) return "ai";
-	if (coverage.humanPercent >= coverage.aiPercent + 12 && coverage.humanPercent >= 28) return "human";
-	return "mixed";
-}
-
-function confidenceOf(coverage: Coverage, verdict: Verdict): string {
-	const lead = verdict === "ai" ? coverage.aiPercent : verdict === "human" ? coverage.humanPercent : Math.max(coverage.aiPercent, coverage.humanPercent, coverage.mixedPercent);
-	if (lead >= 72) return "highly confident";
-	if (lead >= 48) return "fairly confident";
-	return "leaning";
-}
-
-function verdictCopy(coverage: Coverage, scanning: boolean): { confidence: string; result: string; resultClass: string } {
-	if (scanning && coverage.aiPercent + coverage.humanPercent === 0) {
-		return { confidence: "Reading the grain", result: "in this draft", resultClass: "text-ink" };
-	}
-	const verdict = verdictOf(coverage);
-	const confidence = confidenceOf(coverage, verdict);
-	if (verdict === "ai") {
-		return { confidence: `We're ${confidence} this draft is`, result: "AI-style", resultClass: "text-ai" };
-	}
-	if (verdict === "human") {
-		return { confidence: `We're ${confidence} this draft still sounds`, result: "human", resultClass: "text-human" };
-	}
-	return { confidence: `We're ${confidence} this draft is`, result: "mixed", resultClass: "text-mixed" };
-}
-
 function Gauge({
 	percent,
-	verdict,
 	scanning,
+	unavailable,
 }: {
-	percent: number;
-	verdict: Verdict;
+	percent: number | null;
 	scanning: boolean;
+	unavailable: boolean;
 }) {
 	const size = 108;
 	const stroke = 9;
 	const radius = (size - stroke) / 2;
 	const circumference = 2 * Math.PI * radius;
-	const clamped = Math.max(0, Math.min(100, percent));
+	const missing = unavailable || percent === null;
+	const clamped = missing ? 0 : Math.max(0, Math.min(100, percent));
 	const dash = circumference * (1 - clamped / 100);
-	const strokeColor = verdict === "human" ? "var(--human)" : verdict === "ai" ? "var(--ai)" : "var(--mixed)";
-	const label = scanning && clamped === 0 ? "…" : `${Math.round(clamped)}`;
+	const strokeColor = "var(--ai)";
 	return (
-		<svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="shrink-0" aria-hidden>
-			<circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="rgba(28,23,18,0.08)" strokeWidth={stroke} />
-			<circle
-				cx={size / 2}
-				cy={size / 2}
-				r={radius}
-				fill="none"
-				stroke={strokeColor}
-				strokeWidth={stroke}
-				strokeLinecap="round"
-				strokeDasharray={circumference}
-				strokeDashoffset={dash}
-				transform={`rotate(-90 ${size / 2} ${size / 2})`}
-				className="transition-[stroke-dashoffset] duration-500"
-			/>
-			<text
-				x="50%"
-				y="44%"
-				textAnchor="middle"
-				dominantBaseline="middle"
-				fill="currentColor"
-				fontFamily="var(--font-fraunces), Georgia, serif"
-				fontSize="30"
-				fontWeight="600"
-			>
-				{label}
-				{!(scanning && clamped === 0) ? (
-					<tspan fontSize="13" dy="-10">
-						%
-					</tspan>
-				) : null}
-			</text>
-			{scanning ? (
-				<g className="gauge-spin" style={{ transformOrigin: `${size / 2}px ${size / 2}px` }}>
+		<div className="group relative shrink-0">
+			<svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} aria-label={FLAGGED_COVERAGE_TOOLTIP}>
+				<circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="rgba(28,23,18,0.08)" strokeWidth={stroke} />
+				{missing ? null : (
 					<circle
 						cx={size / 2}
 						cy={size / 2}
@@ -147,23 +88,68 @@ function Gauge({
 						stroke={strokeColor}
 						strokeWidth={stroke}
 						strokeLinecap="round"
-						strokeDasharray={`${circumference * 0.22} ${circumference}`}
-						opacity={clamped === 0 ? 1 : 0.4}
+						strokeDasharray={circumference}
+						strokeDashoffset={dash}
+						transform={`rotate(-90 ${size / 2} ${size / 2})`}
+						className="transition-[stroke-dashoffset] duration-500"
 					/>
-				</g>
-			) : null}
-			<text
-				x="50%"
-				y="66%"
-				textAnchor="middle"
-				fill={strokeColor}
-				fontSize="10"
-				fontWeight="600"
-				letterSpacing="0.18em"
+				)}
+				{scanning ? (
+					<g className="gauge-spin" style={{ transformOrigin: `${size / 2}px ${size / 2}px` }}>
+						<circle
+							cx={size / 2}
+							cy={size / 2}
+							r={radius}
+							fill="none"
+							stroke={strokeColor}
+							strokeWidth={stroke}
+							strokeLinecap="round"
+							strokeDasharray={`${circumference * 0.22} ${circumference}`}
+							opacity={missing ? 1 : 0.4}
+						/>
+					</g>
+				) : null}
+				{missing ? (
+					<text
+						x="50%"
+						y="46%"
+						textAnchor="middle"
+						dominantBaseline="middle"
+						fill="currentColor"
+						fontFamily="var(--font-fraunces), Georgia, serif"
+						fontSize={scanning ? 30 : 11}
+						fontWeight="600"
+					>
+						{scanning ? "…" : "Unavailable"}
+					</text>
+				) : (
+					<text
+						x="50%"
+						y="44%"
+						textAnchor="middle"
+						dominantBaseline="middle"
+						fill="currentColor"
+						fontFamily="var(--font-fraunces), Georgia, serif"
+						fontSize="30"
+						fontWeight="600"
+					>
+						{Math.round(clamped)}
+						<tspan fontSize="13" dy="-10">
+							%
+						</tspan>
+					</text>
+				)}
+				<text x="50%" y="68%" textAnchor="middle" fill={strokeColor} fontSize="8" fontWeight="600" letterSpacing="0.14em">
+					FLAGGED TEXT
+				</text>
+			</svg>
+			<span
+				role="tooltip"
+				className="pointer-events-none absolute left-1/2 top-[calc(100%+8px)] z-30 hidden w-64 -translate-x-1/2 rounded-xl border border-ink/10 bg-card px-3 py-2 text-left text-[12px] leading-5 text-muted shadow-[0_12px_28px_rgba(28,23,18,0.14)] group-hover:block"
 			>
-				{scanning && clamped === 0 ? "SCAN" : verdict === "ai" ? "AI" : verdict === "human" ? "HUMAN" : "MIXED"}
-			</text>
-		</svg>
+				{FLAGGED_COVERAGE_TOOLTIP}
+			</span>
+		</div>
 	);
 }
 
@@ -207,23 +193,10 @@ function ScanProgress({ completed, total }: { completed: number; total: number }
 	);
 }
 
-function ChanceChip({
-	label,
-	percent,
-	tone,
-}: {
-	label: string;
-	percent: number;
-	tone: "ai" | "mixed" | "human";
-}) {
-	const tones = {
-		ai: "border-ai/55 text-ai bg-ai-soft/40",
-		mixed: "border-mixed/55 text-mixed bg-mixed-soft/70",
-		human: "border-human/55 text-human bg-human-soft/50",
-	};
+function FindingChip({ children }: { children: React.ReactNode }) {
 	return (
-		<span className={`inline-flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-sm font-medium ${tones[tone]}`}>
-			{label} {percent}%
+		<span className="inline-flex items-center rounded-full border border-ink/12 bg-paper/70 px-3.5 py-1.5 text-sm font-medium text-ink/80">
+			{children}
 		</span>
 	);
 }
@@ -437,41 +410,34 @@ export default function Detector() {
 	const counts = useMemo(() => ({ words: wordCount(text), chars: text.length }), [text]);
 	const highlights = useMemo(() => flattenHighlights(scan.annotations), [scan.annotations]);
 	const patternTallies = useMemo(() => tallyPatterns(scan.annotations), [scan.annotations]);
-	const coverage = useMemo(() => {
-		const total = scan.snapshot.length;
-		let aiChars = 0;
-		let humanChars = 0;
-		for (const span of highlights) {
-			const length = span.end - span.start;
-			if (span.kind === "counter_signal") humanChars += length;
-			else aiChars += length;
+	const findings = useMemo((): ScanFindings | null => {
+		if (scan.scores && isFindingsV2(scan.scores)) return scan.scores;
+		if (isLegacyScores(scan.scores)) return legacyFindings(scan.snapshot.length);
+		if (scan.status === "failed") {
+			return scoreFindings({
+				documentChars: scan.snapshot.length,
+				chunks: [],
+				annotations: [],
+				scanFailed: true,
+			});
 		}
-		const aiPercent = total ? Math.round((aiChars * 100) / total) : 0;
-		const humanPercent = total ? Math.round((humanChars * 100) / total) : 0;
-		return {
-			aiChars,
-			humanChars,
-			restChars: Math.max(0, total - aiChars - humanChars),
-			aiPercent,
-			humanPercent,
-			mixedPercent: Math.max(0, 100 - aiPercent - humanPercent),
-		};
-	}, [highlights, scan.snapshot]);
+		return null;
+	}, [scan.scores, scan.snapshot.length, scan.status]);
 
 	const scanning = scan.status === "scanning";
 	const showMarks = Boolean(scan.snapshot) && !editing;
 	const stale = Boolean(scan.snapshot && text !== scan.snapshot && scan.status !== "waiting");
-	const progressPercent = scan.total > 0 ? Math.round((scan.completed / scan.total) * 100) : 0;
-	const verdict = verdictOf(coverage);
-	const copy = verdictCopy(coverage, scanning);
-	const gaugePercent =
-		scanning && coverage.aiPercent + coverage.humanPercent === 0
-			? progressPercent
-			: verdict === "human"
-				? coverage.humanPercent
-				: verdict === "ai"
-					? coverage.aiPercent
-					: Math.max(coverage.mixedPercent, coverage.aiPercent, coverage.humanPercent);
+	const headline = findings
+		? presentHeadline(findings, scanning, findings.headline === "legacy")
+		: scanning
+			? HEADLINE_COPY.scanning
+			: scan.status === "failed"
+				? HEADLINE_COPY.failed
+				: HEADLINE_COPY.insufficient;
+	const coverageUnavailable = !findings || findings.headline === "legacy" || findings.flaggedCoveragePercent === null;
+	const summaryLead = findings
+		? findings.summary.replace(` ${AUTHORSHIP_DISCLAIMER}`, "").replace(AUTHORSHIP_DISCLAIMER, "").trim()
+		: "";
 
 	function selectHighlight(index: number) {
 		setActive(index);
@@ -714,24 +680,40 @@ export default function Detector() {
 					{showMarks || scanning ? (
 						<div className="shrink-0 overflow-visible border-b border-ink/8 px-6 py-5">
 							<div className="flex flex-wrap items-start gap-5">
-								<Gauge percent={gaugePercent} verdict={verdict} scanning={scanning} />
+								<Gauge
+									percent={coverageUnavailable ? null : findings?.flaggedCoveragePercent ?? null}
+									scanning={scanning}
+									unavailable={coverageUnavailable && !scanning}
+								/>
 								<div className="min-w-[220px] flex-1">
 									<div className="flex flex-wrap items-baseline justify-between gap-2">
 										<p className="text-[11px] uppercase tracking-[0.18em] text-muted">Stylistic scan</p>
 										<p className="text-xs text-muted">
 											{wordCount(scan.snapshot)} words
-											{scan.scores ? ` · ${scan.scores.observationCount} flags` : ""}
+											{findings?.partial ? " · Partial scan" : ""}
+											{scanning || findings?.preliminary ? " · Preliminary" : ""}
 										</p>
 									</div>
-									<p className="mt-2 font-display text-[22px] leading-snug tracking-tight sm:text-[26px]">
-										{copy.confidence}{" "}
-										<span className={`${copy.resultClass} underline decoration-2 underline-offset-[5px]`}>{copy.result}</span>
-									</p>
-									<p className="mt-4 text-[11px] uppercase tracking-[0.16em] text-muted">Chance this draft is…</p>
+									<p className="mt-2 font-display text-[22px] leading-snug tracking-tight sm:text-[26px]">{headline}</p>
+									{summaryLead ? <p className="mt-3 text-sm leading-6 text-ink/80">{summaryLead}</p> : null}
+									<p className="mt-1 text-xs leading-5 text-muted">{AUTHORSHIP_DISCLAIMER}</p>
+									<p className="mt-4 text-[11px] uppercase tracking-[0.16em] text-muted">Scan findings</p>
 									<div className="mt-2 flex flex-wrap gap-2">
-										<ChanceChip label="AI" percent={coverage.aiPercent} tone="ai" />
-										<ChanceChip label="Mixed" percent={coverage.mixedPercent} tone="mixed" />
-										<ChanceChip label="Human" percent={coverage.humanPercent} tone="human" />
+										{findings && findings.headline !== "legacy" ? (
+											<>
+												<FindingChip>
+													{findings.flaggedPassageCount} flagged passage{findings.flaggedPassageCount === 1 ? "" : "s"}
+												</FindingChip>
+												<FindingChip>
+													{findings.patternTypeCount} pattern type{findings.patternTypeCount === 1 ? "" : "s"}
+												</FindingChip>
+												{findings.incomplete ? <FindingChip>{findings.analyzedPercent}% analyzed</FindingChip> : null}
+											</>
+										) : findings?.headline === "legacy" ? (
+											<FindingChip>{HEADLINE_COPY.legacy}</FindingChip>
+										) : scanning ? (
+											<FindingChip>Preliminary</FindingChip>
+										) : null}
 									</div>
 									<PatternKey
 										tallies={patternTallies}

@@ -1,6 +1,6 @@
 import type { AlignedAnnotation } from "@/lib/scan/validate";
-import type { ChunkAssessment, DocumentScores } from "@/lib/scan/score";
-import type { ReviewResponse, SignalLevel } from "@/lib/scan/schema";
+import type { ChunkAssessment, ScanFindings } from "@/lib/scan/score";
+import type { ReviewResponse } from "@/lib/scan/schema";
 
 export type ScanEventType =
 	| "scan_started"
@@ -54,7 +54,7 @@ export type ProgressEvent = BaseEvent & {
 	completed: number;
 	failed: number;
 	total: number;
-	scores: DocumentScores;
+	scores: ScanFindings;
 };
 
 export type DocumentReviewEvent = BaseEvent & {
@@ -65,9 +65,8 @@ export type DocumentReviewEvent = BaseEvent & {
 
 export type ScanCompletedEvent = BaseEvent & {
 	type: "scan_completed";
-	scores: DocumentScores;
+	scores: ScanFindings;
 	summary: string;
-	signal: SignalLevel;
 	failedChunks: string[];
 };
 

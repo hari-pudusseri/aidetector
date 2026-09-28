@@ -1,6 +1,6 @@
-export const SCAN_PROMPT_VERSION = "telltale-scan-v2";
+export const SCAN_PROMPT_VERSION = "telltale-scan-v3";
 export const REVIEW_PROMPT_VERSION = "telltale-review-v1";
-export const SIGNAL_HEURISTIC_VERSION = "telltale-signal-v1";
+export const FINDINGS_SCHEMA_VERSION = "telltale-findings-v2";
 
 /** Muse has no public tokenizer. Conservative estimate: ~3.2 UTF-16 units per token. */
 export const ESTIMATED_CHARS_PER_TOKEN = 3.2;

@@ -144,6 +144,10 @@ describe("scan engine", () => {
 		expect(completed?.type).toBe("scan_completed");
 		if (completed?.type === "scan_completed") {
 			expect(completed.failedChunks.length).toBeGreaterThan(0);
+			expect(completed.scores.schemaVersion).toBe("telltale-findings-v2");
+			expect(completed.scores.partial).toBe(true);
+			expect(completed.scores).not.toHaveProperty("aiPercent");
+			expect(completed.scores).not.toHaveProperty("humanPercent");
 		}
 	});
 
