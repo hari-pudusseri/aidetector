@@ -1,4 +1,5 @@
 import { getCloudflareContext } from "@opennextjs/cloudflare";
+import { sitePasswordFrom } from "@/lib/gate";
 import { museConfigFromEnv, type MuseConfig } from "@/lib/muse";
 
 function processEnv(): Record<string, string | undefined> {
@@ -14,6 +15,19 @@ function processEnv(): Record<string, string | undefined> {
 function stringField(env: object, key: string): string | undefined {
 	const value = (env as Record<string, unknown>)[key];
 	return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+export async function getSitePassword(): Promise<string | undefined> {
+	// Middleware can only see process.env (Next `.env.local` in `next dev`).
+	// Prefer that so the signed session cookie verifies on /api/detect.
+	const fromProcess = sitePasswordFrom(process.env);
+	if (fromProcess) return fromProcess;
+	try {
+		const { env } = await getCloudflareContext({ async: true });
+		return stringField(env, "SITE_PASSWORD");
+	} catch {
+		return undefined;
+	}
 }
 
 export async function getMuseConfig(): Promise<MuseConfig> {

@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
+    "test": "vitest run",
     "preview:watch": "./dev/dev.sh",
     "prod": "./dev/prod.sh",
     "deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",
@@ -18,7 +19,8 @@
     "@opennextjs/cloudflare": "^1.20.3",
     "next": "16.3.4",
     "react": "^19.1.7",
-    "react-dom": "^19.1.7"
+    "react-dom": "^19.1.7",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
@@ -30,6 +32,7 @@
     "eslint-config-next": "16.3.4",
     "tailwindcss": "^4",
     "typescript": "^5.7.4",
+    "vitest": "^3.2.7",
     "wrangler": "^4.142.0"
   }
 }

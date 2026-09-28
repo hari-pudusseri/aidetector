@@ -1,44 +1,111 @@
-import { DETECT_INSTRUCTION, DETECTOR_SYSTEM } from "@/lib/patterns";
-import { normalizeDetection, parseJsonObject, prepareSource } from "@/lib/detect";
-import { getMuseConfig } from "@/lib/env";
-import { museComplete } from "@/lib/muse";
+import { getScanConfig } from "@/lib/scan/config";
+import type { ScanEvent } from "@/lib/scan/events";
+import { runScan } from "@/lib/scan/engine";
+import { getMuseConfig, getSitePassword } from "@/lib/env";
+import { apiGateResponse } from "@/lib/gate";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
+function encodeEvent(event: ScanEvent): Uint8Array {
+	return new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`);
+}
+
 export async function POST(request: Request) {
+	const denied = await apiGateResponse(request.headers.get("cookie"), await getSitePassword());
+	if (denied) return denied;
+
+	let body: { text?: unknown; scanId?: unknown; retryChunkIds?: unknown };
 	try {
-		const body = (await request.json()) as { text?: unknown };
-		const text = prepareSource(typeof body.text === "string" ? body.text : "");
-		const config = await getMuseConfig();
-		const user = `${DETECT_INSTRUCTION}\n---TEXT---\n${text}\n---END---\n`;
-		console.log(
-			JSON.stringify({
-				message: "detect start",
-				chars: text.length,
-				model: config.model,
-			}),
-		);
-		const raw = await museComplete(config, DETECTOR_SYSTEM, user);
-		const payload = parseJsonObject(raw);
-		const result = normalizeDetection(text, payload, {
-			provider: "muse",
-			model: config.model,
-		});
-		console.log(
-			JSON.stringify({
-				message: "detect done",
-				aiScore: result.aiScore,
-				humanScore: result.humanScore,
-				spans: result.spans.length,
-			}),
-		);
-		return Response.json(result);
-	} catch (error) {
-		const message = error instanceof Error ? error.message : "Scan failed";
-		console.error(JSON.stringify({ message: "detect failed", error: message }));
-		const status = message.includes("Paste some prose") || message.includes("40,000") ? 400 : 502;
-		return Response.json({ error: message }, { status });
+		body = (await request.json()) as { text?: unknown; scanId?: unknown; retryChunkIds?: unknown };
+	} catch {
+		return Response.json({ error: "Expected JSON." }, { status: 400 });
 	}
+
+	const text = typeof body.text === "string" ? body.text : "";
+	if (!text.trim()) {
+		return Response.json({ error: "Paste some prose first." }, { status: 400 });
+	}
+
+	const retryChunkIds = Array.isArray(body.retryChunkIds)
+		? body.retryChunkIds.filter((value): value is string => typeof value === "string")
+		: undefined;
+
+	let muse;
+	try {
+		muse = await getMuseConfig();
+	} catch (error) {
+		return Response.json({ error: error instanceof Error ? error.message : "Muse is not configured." }, { status: 500 });
+	}
+
+	const config = getScanConfig({ timeoutMs: muse.timeoutMs });
+	if (text.length > config.maxDocumentChars) {
+		return Response.json(
+			{ error: `Keep the sample under ${config.maxDocumentChars.toLocaleString()} characters.` },
+			{ status: 400 },
+		);
+	}
+
+	const abort = new AbortController();
+	request.signal.addEventListener("abort", () => abort.abort(), { once: true });
+
+	const stream = new ReadableStream({
+		async start(controller) {
+			try {
+				console.log(
+					JSON.stringify({
+						message: "scan start",
+						chars: text.length,
+						retry: Boolean(retryChunkIds?.length),
+						model: muse.model,
+					}),
+				);
+				for await (const event of runScan({
+					text,
+					scanId: typeof body.scanId === "string" ? body.scanId : undefined,
+					retryChunkIds,
+					signal: abort.signal,
+					muse,
+					config,
+				})) {
+					controller.enqueue(encodeEvent(event));
+					if (event.type === "scan_completed") {
+						console.log(
+							JSON.stringify({
+								message: "scan done",
+								signal: event.signal,
+								failed: event.failedChunks.length,
+							}),
+						);
+					}
+				}
+			} catch (error) {
+				const message = error instanceof Error ? error.message : "Scan failed";
+				console.error(JSON.stringify({ message: "scan failed", error: message }));
+				controller.enqueue(
+					encodeEvent({
+						type: "scan_error",
+						scanId: typeof body.scanId === "string" ? body.scanId : "unknown",
+						seq: 0,
+						message,
+					}),
+				);
+			} finally {
+				controller.close();
+			}
+		},
+		cancel() {
+			abort.abort();
+		},
+	});
+
+	return new Response(stream, {
+		headers: {
+			"Content-Type": "text/event-stream; charset=utf-8",
+			"Cache-Control": "no-cache, no-transform",
+			Connection: "keep-alive",
+			"X-Accel-Buffering": "no",
+		},
+	});
 }

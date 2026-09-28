@@ -9,7 +9,10 @@
 	],
 	"assets": {
 		"binding": "ASSETS",
-		"directory": ".open-next/assets"
+		"directory": ".open-next/assets",
+		// Password gate must see every request. Asset-first routing would serve
+		// prerendered HTML without running middleware.
+		"run_worker_first": true
 	},
 	"images": {
 		"binding": "IMAGES"
@@ -32,10 +35,22 @@
 		}
 	},
 	"upload_source_maps": true,
+	"workers_dev": true,
+	"preview_urls": true,
+	"routes": [
+		{ "pattern": "telltaleai.app", "custom_domain": true },
+		{ "pattern": "www.telltaleai.app", "custom_domain": true }
+	],
+	// SITE_PASSWORD is a Worker secret, not a var:
+	//   npx wrangler secret put SITE_PASSWORD
+	// MUSE_API_KEY is a Worker secret:
+	//   npx wrangler secret put MUSE_API_KEY
 	"vars": {
 		"MUSE_BASE_URL": "https://api.meta.ai/v1",
 		"MUSE_MODEL": "muse-spark-1.3-contributor",
 		"MUSE_REASONING_EFFORT": "medium",
-		"MUSE_TIMEOUT_MS": "90000"
+		"MUSE_TIMEOUT_MS": "90000",
+		"SCAN_CONCURRENCY": "2",
+		"SCAN_REVIEW_ENABLED": "false"
 	}
 }
